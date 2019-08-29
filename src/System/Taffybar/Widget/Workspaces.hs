@@ -75,7 +75,7 @@ data WindowData = WindowData
   , windowUrgent :: Bool
   , windowActive :: Bool
   , windowMinimized :: Bool
-  } deriving (Show, Eq)
+  } deriving (Show, Eq, Ord)
 
 data WidgetUpdate = WorkspaceUpdate Workspace | IconUpdate [X11Window]
 
@@ -92,6 +92,7 @@ data WorkspacesContext = WorkspacesContext
   , workspacesWidget :: Gtk.Box
   , workspacesConfig :: WorkspacesConfig
   , taffyContext :: Context
+  , iconCache :: MV.MVar (IconCache)
   }
 
 type WorkspacesIO a = ReaderT WorkspacesContext IO a
@@ -292,6 +293,7 @@ workspacesNew cfg = ask >>= \tContext -> lift $ do
   cont <- Gtk.boxNew Gtk.OrientationHorizontal $ fromIntegral (widgetGap cfg)
   controllersRef <- MV.newMVar M.empty
   workspacesRef <- MV.newMVar M.empty
+  iconCacheRef <- MV.newMVar M.empty
   let context =
         WorkspacesContext
         { controllersVar = controllersRef
@@ -299,6 +301,7 @@ workspacesNew cfg = ask >>= \tContext -> lift $ do
         , workspacesWidget = cont
         , workspacesConfig = cfg
         , taffyContext = tContext
+        , iconCache = iconCacheRef
         }
   -- This will actually create all the widgets
   runReaderT updateAllWorkspaceWidgets context
@@ -525,6 +528,8 @@ data IconWidget = IconWidget
   , iconForceUpdate :: IO ()
   }
 
+type IconCache = M.Map WindowData (TaffyIO (Maybe Gdk.Pixbuf))
+
 getPixbufForIconWidget :: Bool
                        -> MV.MVar (Maybe WindowData)
                        -> Int32
@@ -532,7 +537,7 @@ getPixbufForIconWidget :: Bool
 getPixbufForIconWidget transparentOnNone dataVar size = do
   ctx <- ask
   let tContext = taffyContext ctx
-      getPBFromData = getWindowIconPixbuf $ workspacesConfig ctx
+      getPBFromData = cachingGetWindowIconPixbuf (iconCache ctx) (getWindowIconPixbuf $ workspacesConfig ctx)
       getPB' = runMaybeT $
                MaybeT (lift $ MV.readMVar dataVar) >>= MaybeT . getPBFromData size
       getPB = if transparentOnNone
@@ -632,6 +637,20 @@ getWindowIconPixbufFromDesktopEntry size windowData =
 getWindowIconPixbufFromChrome :: WindowIconPixbufGetter
 getWindowIconPixbufFromChrome _ windowData =
   getPixBufFromChromeData $ windowId windowData
+
+cachingGetWindowIconPixbuf :: MV.MVar IconCache -> WindowIconPixbufGetter -> WindowIconPixbufGetter
+cachingGetWindowIconPixbuf mvcache defaultGetter size windowData = do
+  cache <- liftIO $ MV.readMVar mvcache
+  case cache M.!? windowData of
+    Just x -> do
+      wLog DEBUG "Icon Cache Hit"
+      x
+    Nothing -> do
+      wLog DEBUG "Icon NO Cache Hit"
+      let pixbuf = defaultGetter size windowData
+      let u = M.insert windowData pixbuf cache
+      lift $ MV.modifyMVar_ mvcache $ \_ -> return u
+      pixbuf
 
 defaultGetWindowIconPixbuf :: WindowIconPixbufGetter
 defaultGetWindowIconPixbuf =
