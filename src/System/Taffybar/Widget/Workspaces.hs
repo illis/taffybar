@@ -528,7 +528,7 @@ data IconWidget = IconWidget
   , iconForceUpdate :: IO ()
   }
 
-type IconCache = M.Map WindowData (TaffyIO (Maybe Gdk.Pixbuf))
+type IconCache = M.Map WindowData (Maybe Gdk.Pixbuf)
 
 getPixbufForIconWidget :: Bool
                        -> MV.MVar (Maybe WindowData)
@@ -536,8 +536,10 @@ getPixbufForIconWidget :: Bool
                        -> WorkspacesIO (Maybe Gdk.Pixbuf)
 getPixbufForIconWidget transparentOnNone dataVar size = do
   ctx <- ask
+  --wLog WARNING "getPixbufForIconWidget"
   let tContext = taffyContext ctx
-      getPBFromData = cachingGetWindowIconPixbuf (iconCache ctx) (getWindowIconPixbuf $ workspacesConfig ctx)
+      getPBFromData = cachingGetWindowIconPixbuf (iconCache ctx) $ getWindowIconPixbuf $ workspacesConfig ctx
+      --getPBFromData = getWindowIconPixbuf $ workspacesConfig ctx
       getPB' = runMaybeT $
                MaybeT (lift $ MV.readMVar dataVar) >>= MaybeT . getPBFromData size
       getPB = if transparentOnNone
@@ -631,26 +633,28 @@ getWindowIconPixbufFromClass size windowData =
   lift $ getWindowIconFromClasses size (windowClass windowData)
 
 getWindowIconPixbufFromDesktopEntry :: WindowIconPixbufGetter
-getWindowIconPixbufFromDesktopEntry size windowData =
+getWindowIconPixbufFromDesktopEntry size windowData = do
+  --wLog WARNING "getWindowIconPixbufFromDesktopEntry"
   getWindowIconFromDesktopEntryByClasses size (windowClass windowData)
 
 getWindowIconPixbufFromChrome :: WindowIconPixbufGetter
 getWindowIconPixbufFromChrome _ windowData =
   getPixBufFromChromeData $ windowId windowData
 
+  --Int32 -> WindowData -> TaffyIO (Maybe Gdk.Pixbuf)
 cachingGetWindowIconPixbuf :: MV.MVar IconCache -> WindowIconPixbufGetter -> WindowIconPixbufGetter
 cachingGetWindowIconPixbuf mvcache defaultGetter size windowData = do
   cache <- liftIO $ MV.readMVar mvcache
   case cache M.!? windowData of
     Just x -> do
-      wLog DEBUG "Icon Cache Hit"
-      x
+      --wLog WARNING "Icon Cache Hit"
+      pure x
     Nothing -> do
-      wLog DEBUG "Icon NO Cache Hit"
-      let pixbuf = defaultGetter size windowData
+      --wLog WARNING "Icon NO Cache Hit"
+      pixbuf <- defaultGetter size windowData
       let u = M.insert windowData pixbuf cache
       lift $ MV.modifyMVar_ mvcache $ \_ -> return u
-      pixbuf
+      pure pixbuf
 
 defaultGetWindowIconPixbuf :: WindowIconPixbufGetter
 defaultGetWindowIconPixbuf =
